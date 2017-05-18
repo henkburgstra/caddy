@@ -112,12 +112,13 @@ func (l Listing) Breadcrumbs() []Crumb {
 
 // FileInfo is the info about a particular file or directory
 type FileInfo struct {
-	Name    string
-	Size    int64
-	URL     string
-	ModTime time.Time
-	Mode    os.FileMode
-	IsDir   bool
+	Name      string
+	Size      int64
+	URL       string
+	ModTime   time.Time
+	Mode      os.FileMode
+	IsDir     bool
+	IsSymlink bool
 }
 
 // HumanSize returns the size of the file as a human-readable string
@@ -227,6 +228,33 @@ func (l Listing) applySort() {
 	}
 }
 
+// symlinkPointsToDir determines if as symbolic link (eventually)
+// points to a directory
+func symlinkPointsToDir(name string) bool {
+	// inner function to protect against endless recursion
+	return func(name string, depth int) bool {
+		if depth == 10 {
+			return false
+		}
+		depth++
+
+		src, err := os.Readlink(name)
+		if err != nil {
+			return false
+		}
+		fs, err := os.Stat(src)
+		if err != nil {
+			return false
+		}
+		if fs.IsDir() {
+			return true
+		} else if fs.Mode()&os.ModeSymlink != 0 {
+			return symlinkPointsToDir(src)
+		}
+		return false
+	}(name, 0)
+}
+
 func directoryListing(files []os.FileInfo, canGoUp bool, urlPath string, config *Config) (Listing, bool) {
 	var (
 		fileinfos           []FileInfo
@@ -244,7 +272,11 @@ func directoryListing(files []os.FileInfo, canGoUp bool, urlPath string, config 
 			}
 		}
 
-		if f.IsDir() {
+		isDir := false
+		isSymlink := (f.Mode()&os.ModeSymlink != 0)
+
+		if f.IsDir() || (isSymlink && symlinkPointsToDir(name)) {
+			isDir = true
 			name += "/"
 			dirCount++
 		} else {
@@ -258,12 +290,13 @@ func directoryListing(files []os.FileInfo, canGoUp bool, urlPath string, config 
 		url := url.URL{Path: "./" + name} // prepend with "./" to fix paths with ':' in the name
 
 		fileinfos = append(fileinfos, FileInfo{
-			IsDir:   f.IsDir(),
-			Name:    f.Name(),
-			Size:    f.Size(),
-			URL:     url.String(),
-			ModTime: f.ModTime().UTC(),
-			Mode:    f.Mode(),
+			IsDir:     isDir,
+			IsSymlink: isSymlink,
+			Name:      f.Name(),
+			Size:      f.Size(),
+			URL:       url.String(),
+			ModTime:   f.ModTime().UTC(),
+			Mode:      f.Mode(),
 		})
 	}
 
